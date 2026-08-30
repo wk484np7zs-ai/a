@@ -1,0 +1,12 @@
+{
+  "name": "lead-magnet-site",
+  "private": true,
+  "version": "0.0.0",
+  "description": "リードマグネットのランディングページ用テスト",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.0"
+  }
+}
