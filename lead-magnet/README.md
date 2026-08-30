@@ -20,6 +20,18 @@ PDF・LPともに、以下はプレースホルダーのままです。ご自身
 - 個別カウンセリングの申込URL・メールアドレス・Instagram/LINE公式アカウント
 - LPの「ABOUT COUNSELOR」欄のプロフィール文・写真(現在プレースホルダー画像)
 
+## ご感想(フィードバック)ボタンについて
+
+LPのフッターに「このページのご感想を送る」ボタンがあります。押すとダイアログが開き、
+3段階の評価(役に立った / ふつう / 期待と違った)と自由記述のご感想を送信できます。
+氏名・メールアドレスは送信されません。
+
+**受け取るにはWebhookの設定が必要です。** `landing-page/index.html` 内の
+`FEEDBACK_WEBHOOK_URL` が空のままだと、訪問者にはお礼が表示されますが、
+内容はどこにも記録されません(送信先がないため)。ご意見を受け取りたい場合は、
+`LEAD_WEBHOOK_URL` と同じ要領で受信URLを設定してください。送信される内容は
+`rating`(評価) / `comment`(ご感想) / `source` / `ts`(送信日時)のJSONです。
+
 ## メールアドレスの自動収集について
 
 `landing-page/index.html` 内の `LEAD_WEBHOOK_URL`(JavaScript内、`lead-form` の送信処理付近)に、
@@ -32,3 +44,15 @@ PDF・LPともに、以下はプレースホルダーのままです。ご自身
 `build_pdf.py` を編集後に再生成したら、`landing-page/index.html` にも埋め込み直す必要があります
 (PDFはBase64エンコードしてページ内に埋め込んでいるため)。埋め込み直す際は、生成した
 `output.pdf` をBase64化し、`index.html` 内の `window.__LEAD_MAGNET_PDF_BASE64__` の値を置き換えてください。
+
+## テスト
+
+LPの動作(ご感想ボタン、リード獲得フォーム)はリポジトリ直下のテストで確認できます。
+
+```bash
+npm install     # 初回のみ
+npx playwright install chromium   # 初回のみ(ブラウザの取得)
+npm test
+```
+
+`index.html` を編集したら実行してください。
