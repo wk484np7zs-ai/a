@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PAGE_PATH = path.join(__dirname, '..', 'lead-magnet', 'landing-page', 'index.html');
+const WIFI_PAGE_PATH = path.join(__dirname, '..', 'wifi-logger', 'index.html');
 
 // index.html は <!doctype>/<html>/<head>/<body> を持たない(Artifact が publish 時に
 // 包むため)。テストでも同じスケルトンを被せて、本番と同じ条件で検証する。
@@ -51,4 +52,12 @@ function buildPage(options = {}) {
   return SKELETON_HEAD + body + SKELETON_FOOT;
 }
 
-module.exports = { buildPage, PAGE_PATH, FEEDBACK_WEBHOOK_DECL };
+/**
+ * Wi-Fi切断ロガーを、同じ Artifact スケルトンで包んで返す。
+ * こちらは差し替えるプレースホルダーを持たないので、包むだけ。
+ */
+function buildWifiPage() {
+  return SKELETON_HEAD + fs.readFileSync(WIFI_PAGE_PATH, 'utf8') + SKELETON_FOOT;
+}
+
+module.exports = { buildPage, buildWifiPage, PAGE_PATH, WIFI_PAGE_PATH, FEEDBACK_WEBHOOK_DECL };

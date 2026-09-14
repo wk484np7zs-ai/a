@@ -1,26 +1,80 @@
 const http = require('http');
 const { test: base, expect } = require('@playwright/test');
-const { buildPage } = require('./harness');
+const { buildPage, buildWifiPage } = require('./harness');
 
 /**
- * `openLandingPage(options)` を提供するフィクスチャ。
- * ビルドしたHTMLを ephemeral な localhost サーバーから配信して開く。
- * Google Fonts への実アクセスは遮断し、テストをネットワークから切り離す。
+ * ビルド済みHTMLを ephemeral な localhost サーバーから配信して開く。
+ * `about:blank` ではなく実オリジンから配信するのは、Blob ダウンロードと fetch を
+ * 本番と同じ条件に置くため。
+ */
+function serveHtml(page, html) {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(html);
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', async () => {
+      await page.goto(`http://127.0.0.1:${server.address().port}/`);
+      resolve(server);
+    });
+  });
+}
+
+/**
+ * `openLandingPage(options)` と `openWifiLogger(options)` を提供するフィクスチャ。
+ * どちらも外部ネットワークを遮断し、テストをネットワークから切り離す。
  */
 const test = base.extend({
   openLandingPage: async ({ page }, use) => {
     let server = null;
 
     const open = async (options = {}) => {
-      const html = buildPage(options);
-      server = http.createServer((req, res) => {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(html);
-      });
-      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-
       await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) => route.abort());
-      await page.goto(`http://127.0.0.1:${server.address().port}/`);
+      server = await serveHtml(page, buildPage(options));
+    };
+
+    await use(open);
+
+    if (server) {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  },
+
+  /**
+   * ロガーを開く。`online` で監視先の応答を切り替えられる(既定は疎通あり)。
+   * 返り値の `setOnline(bool)` で、テスト中に回線の切断/復旧を再現する。
+   */
+  openWifiLogger: async ({ page }, use) => {
+    let server = null;
+    let online = true;
+
+    const open = async (options = {}) => {
+      online = options.online !== false;
+
+      // 監視先は実在のホストなので、テストでは必ず横取りする。
+      await page.route(/www\.google\.com/, (route) => {
+        if (!online) return route.abort('failed');
+        return route.fulfill({
+          status: 200,
+          contentType: 'image/gif',
+          body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'),
+        });
+      });
+
+      server = await serveHtml(page, buildWifiPage());
+
+      if (options.seedSession) {
+        await page.evaluate((s) => {
+          localStorage.setItem('wifi-logger.session.v1', JSON.stringify(s));
+        }, options.seedSession);
+        await page.reload();
+      }
+
+      return {
+        setOnline: (value) => {
+          online = value;
+        },
+      };
     };
 
     await use(open);

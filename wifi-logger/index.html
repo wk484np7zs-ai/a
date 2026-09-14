@@ -1,0 +1,963 @@
+<title>Wi-Fi切断ロガー</title>
+<style>
+  /* 意匠: 設備室のストリップチャート記録紙。
+     Wi-Fi が切れる現場で使う道具なので、外部Webフォントは読み込まず端末内蔵の書体だけで組む。
+     配色も記録紙の一つの世界に寄せているため、ライト/ダークの切り替えは持たない
+     (夜間は後述の減光レイヤーが担当する)。色はすべて明示的に指定する。 */
+  :root{
+    --paper:#E9EDE6;
+    --paper-2:#F3F6F1;
+    --rule:#C7D2C2;
+    --rule-strong:#A9B9A4;
+    --ink:#1C2620;
+    --ink-soft:#5B685F;
+    --fault:#B0212B;
+    --amber:#C25E00;
+    --ok:#2C6B48;
+    --sans:"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Noto Sans CJK JP","Yu Gothic",Meiryo,system-ui,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"Roboto Mono",Consolas,"Courier New",monospace;
+  }
+  *{box-sizing:border-box}
+  html{height:100%}
+  body{
+    margin:0;
+    background:var(--paper);
+    background-image:
+      linear-gradient(var(--rule) 1px, transparent 1px),
+      linear-gradient(90deg, var(--rule) 1px, transparent 1px);
+    background-size:100% 24px, 24px 100%;
+    background-position:-1px -1px;
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:16px;
+    line-height:1.6;
+    font-variant-numeric:tabular-nums;
+    -webkit-text-size-adjust:100%;
+    padding:0 0 calc(104px + env(safe-area-inset-bottom, 0px));
+  }
+  .wrap{max-width:760px;margin:0 auto;padding:16px}
+  .sheet{
+    background:var(--paper-2);
+    border:1.5px solid var(--rule-strong);
+    padding:18px 18px 20px;
+    margin-bottom:14px;
+  }
+  h1{font-size:17px;font-weight:700;margin:0 0 2px;letter-spacing:.02em;text-wrap:balance}
+  .sub{font-size:13px;color:var(--ink-soft);margin:0 0 16px}
+
+  /* ---- 状態表示 ---- */
+  .status{
+    display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+    border-top:3px solid var(--ink);border-bottom:1px solid var(--rule-strong);
+    padding:14px 0 12px;margin-bottom:14px;
+  }
+  .lamp{
+    width:22px;height:22px;border-radius:50%;
+    border:2px solid var(--ink);background:var(--rule);
+    flex:0 0 auto;align-self:center;
+  }
+  .lamp.ok{background:var(--ok);border-color:var(--ok)}
+  .lamp.ng{background:var(--fault);border-color:var(--fault)}
+  .lamp.idle{background:transparent}
+  .state-word{font-size:38px;font-weight:700;line-height:1.1;letter-spacing:.04em}
+  .state-word.ng{color:var(--fault)}
+  .state-since{font-family:var(--mono);font-size:20px;color:var(--ink-soft)}
+  .clock{margin-left:auto;font-family:var(--mono);font-size:22px;align-self:center}
+
+  /* ---- 記録紙 ---- */
+  .chart-frame{border:1px solid var(--rule-strong);background:#fff;margin-bottom:6px}
+  canvas{display:block;width:100%;height:132px}
+  .chart-cap{font-size:12px;color:var(--ink-soft);margin:0 0 16px}
+
+  /* ---- 数値 ---- */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:1px;background:var(--rule-strong);border:1px solid var(--rule-strong)}
+  .stat{background:var(--paper-2);padding:10px 12px}
+  .stat dt{font-size:12px;color:var(--ink-soft);margin:0}
+  .stat dd{margin:2px 0 0;font-family:var(--mono);font-size:22px;font-weight:600}
+  .stat dd.fault{color:var(--fault)}
+
+  /* ---- 監視先ランプ ---- */
+  .targets{list-style:none;margin:14px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:8px 18px}
+  .targets li{display:flex;align-items:center;gap:8px;font-size:13px;font-family:var(--mono)}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--rule);border:1px solid var(--rule-strong);flex:0 0 auto}
+  .dot.ok{background:var(--ok);border-color:var(--ok)}
+  .dot.ng{background:var(--fault);border-color:var(--fault)}
+
+  /* ---- 表 ---- */
+  .table-scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:8px 6px;text-align:left;border-bottom:1px solid var(--rule);white-space:nowrap}
+  th{font-size:12px;color:var(--ink-soft);font-weight:600;border-bottom:1.5px solid var(--rule-strong)}
+  td.num{font-family:var(--mono)}
+  tr.gap td{color:var(--amber)}
+  tr.live td{color:var(--fault);font-weight:600}
+  .people{width:72px;font-family:var(--mono);font-size:15px;padding:5px 6px;border:1px solid var(--rule-strong);background:#fff;color:var(--ink)}
+  .empty{color:var(--ink-soft);font-size:14px;padding:18px 0;margin:0}
+
+  /* ---- 操作 ---- */
+  .bar{
+    position:fixed;left:0;right:0;bottom:0;z-index:20;
+    background:var(--paper-2);border-top:1.5px solid var(--ink);
+    padding:12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+    display:flex;gap:8px;justify-content:center;flex-wrap:wrap;
+  }
+  button{
+    font-family:var(--sans);font-size:16px;font-weight:600;
+    padding:12px 18px;min-height:48px;
+    border:1.5px solid var(--ink);background:var(--paper-2);color:var(--ink);
+    cursor:pointer;
+  }
+  button.primary{background:var(--ink);color:var(--paper-2)}
+  button.primary.running{background:var(--fault);border-color:var(--fault)}
+  button:disabled{opacity:.4;cursor:default}
+  button:focus-visible{outline:3px solid var(--amber);outline-offset:2px}
+  input:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid var(--amber);outline-offset:2px}
+
+  /* ---- 設定 ---- */
+  details{border-top:1px solid var(--rule-strong);margin-top:16px;padding-top:12px}
+  summary{cursor:pointer;font-size:14px;font-weight:600;list-style:revert}
+  .field{margin:14px 0}
+  label{display:block;font-size:13px;color:var(--ink-soft);margin-bottom:4px}
+  #settings textarea,#settings input[type=number]{
+    font-family:var(--mono);font-size:15px;width:100%;max-width:100%;
+    padding:9px 10px;border:1px solid var(--rule-strong);background:#fff;color:var(--ink);
+  }
+  #settings textarea{min-height:88px;resize:vertical}
+  #settings textarea:disabled{background:var(--paper);color:var(--ink-soft)}
+  .inline{display:flex;gap:12px;flex-wrap:wrap}
+  .inline .field{flex:1 1 130px;margin:0}
+  .hint{font-size:12px;color:var(--ink-soft);margin:5px 0 0}
+  .toggle{display:flex;align-items:center;gap:9px;font-size:14px;color:var(--ink);margin-top:14px}
+  .toggle input{width:20px;height:20px;flex:0 0 auto}
+
+  /* ---- 通知 ---- */
+  .note{border-left:4px solid var(--amber);background:#fff;padding:11px 13px;font-size:13.5px;margin:0 0 14px}
+  .note p{margin:0}
+  .note.err{border-left-color:var(--fault)}
+  .note.resume{border-left-color:var(--ok)}
+  .note.hidden{display:none}
+  .note-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .note-actions button{font-size:14px;padding:8px 12px;min-height:40px}
+  .test-out{font-family:var(--mono);font-size:13px;white-space:pre-wrap;background:#fff;border:1px solid var(--rule-strong);padding:10px;margin-top:10px}
+  .test-out:empty{display:none}
+
+  /* ---- 減光(焼き付き・電力対策) ---- */
+  #dimLayer{
+    position:fixed;inset:0;z-index:60;display:none;
+    background:#050706;color:#4A5A50;
+    align-items:center;justify-content:center;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #dimBox{text-align:center;transition:transform 8s linear}
+  #dimWord{font-size:26px;font-weight:700;letter-spacing:.08em}
+  #dimWord.ng{color:#B0212B}
+  #dimSub{font-family:var(--mono);font-size:14px;margin-top:8px}
+  #dimHint{font-size:11px;margin-top:26px;opacity:.55}
+
+  @media (prefers-reduced-motion: reduce){
+    #dimBox{transition:none}
+  }
+  @media (max-width:520px){
+    .state-word{font-size:30px}
+    .clock{font-size:18px}
+  }
+</style>
+
+<div class="wrap">
+
+  <div class="sheet">
+    <h1>Wi-Fi 切断ロガー</h1>
+    <p class="sub">トレーニング室 BGM 用タブレットの通信状況を記録します</p>
+
+    <div class="note" id="fgNote">
+      Chrome を前面に出したまま使ってください。他のアプリに切り替えると Android が計測を止めるため、その間は「計測中断」として記録されます。画面を分割し、片側に Chrome、片側に茅ヶ崎FMアプリを置くと両立できます。終日動かす場合は電源に接続してください。記録は数秒ごとに端末内へ保存され、画面を閉じても残ります。
+    </div>
+
+    <div class="note resume hidden" id="resumeNote">
+      <p id="resumeText"></p>
+      <div class="note-actions">
+        <button type="button" id="btnResume">続きから再開</button>
+        <button type="button" id="btnResumeSave">記録を書き出す</button>
+        <button type="button" id="btnResumeDrop">破棄</button>
+      </div>
+    </div>
+
+    <div class="note err hidden" id="alertNote"></div>
+
+    <div class="status" aria-live="polite">
+      <span class="lamp idle" id="lamp"></span>
+      <span class="state-word" id="stateWord">停止中</span>
+      <span class="state-since" id="stateSince"></span>
+      <span class="clock" id="clock">--:--:--</span>
+    </div>
+
+    <div class="chart-frame">
+      <canvas id="chart" role="img" aria-label="直近60分の接続状態を示す記録紙。赤い帯が切断、橙の帯が計測中断。"></canvas>
+    </div>
+    <p class="chart-cap">直近60分の記録。赤い帯が切断、橙の帯が計測中断です。</p>
+
+    <dl class="stats">
+      <div class="stat"><dt>監視開始</dt><dd id="sStart">--:--</dd></div>
+      <div class="stat"><dt>経過時間</dt><dd id="sElapsed">0:00:00</dd></div>
+      <div class="stat"><dt>チェック回数</dt><dd id="sChecks">0</dd></div>
+      <div class="stat"><dt>切断回数</dt><dd id="sEvents" class="fault">0</dd></div>
+      <div class="stat"><dt>合計停止（分）</dt><dd id="sDown" class="fault">0.0</dd></div>
+    </dl>
+
+    <ul class="targets" id="lamps"></ul>
+  </div>
+
+  <div class="sheet">
+    <h1>切断の記録</h1>
+    <p class="sub">在室人数はその場で入力できます。CSV にそのまま出力されます。</p>
+    <div id="eventsBox">
+      <p class="empty" id="emptyMsg">まだ切断は記録されていません。</p>
+      <div class="table-scroll">
+        <table id="eventsTable" style="display:none">
+          <thead><tr>
+            <th>発生日</th><th>切断開始</th><th>復旧時刻</th><th>停止（分）</th><th>在室人数</th><th>種別</th>
+          </tr></thead>
+          <tbody id="eventsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <details id="settings">
+      <summary>監視の設定</summary>
+
+      <div class="field">
+        <label for="targets">監視先（1行に1件）</label>
+        <textarea id="targets" spellcheck="false">https://www.google.com/favicon.ico</textarea>
+        <p class="hint">外部インターネットの疎通を見ます。館内ゲートウェイや AP の画像 URL を追加すると、どの区間が切れたかを分けて記録できます。監視中は変更できません。</p>
+      </div>
+
+      <div class="inline">
+        <div class="field">
+          <label for="interval">確認の間隔（秒）</label>
+          <input type="number" id="interval" value="30" min="5" max="600">
+        </div>
+        <div class="field">
+          <label for="timeout">応答待ち（秒）</label>
+          <input type="number" id="timeout" value="8" min="2" max="60">
+        </div>
+        <div class="field">
+          <label for="threshold">切断とみなす連続失敗</label>
+          <input type="number" id="threshold" value="2" min="1" max="10">
+        </div>
+      </div>
+      <p class="hint">1回の失敗は一時的なパケットロスのこともあるため、既定では2回続けて失敗したときに切断として記録します。この3つは監視中でも変更でき、次の確認から反映されます。</p>
+
+      <label class="toggle"><input type="checkbox" id="wake" checked> 監視中は画面を消さない</label>
+      <label class="toggle"><input type="checkbox" id="dim" checked> 3分操作がなければ画面を暗くする（焼き付き防止・切断時は自動で復帰）</label>
+
+      <div class="field" style="margin-top:16px">
+        <button type="button" id="btnTest">接続テストを実行</button>
+        <p class="hint">監視先に届くか、どの方式で届くかを先に確かめます。</p>
+        <div class="test-out" id="testOut"></div>
+      </div>
+    </details>
+  </div>
+
+</div>
+
+<div id="dimLayer"><div id="dimBox">
+  <div id="dimWord">監視中</div>
+  <div id="dimSub">--:--:--</div>
+  <div id="dimHint">画面をタップすると戻ります</div>
+</div></div>
+
+<div class="bar">
+  <button type="button" class="primary" id="btnRun">監視を開始</button>
+  <button type="button" id="btnCsvEvents" disabled>切断記録を保存</button>
+  <button type="button" id="btnCsvAll" disabled>全記録を保存</button>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var $ = function(id){ return document.getElementById(id); };
+
+  var SESSION_KEY = "wifi-logger.session.v1";
+  var CONFIG_KEY  = "wifi-logger.config.v1";
+
+  var state = {
+    running:false, method:"auto", timer:null,
+    startedAt:null, checks:0,
+    samples:[],          // {t, ok, per:[{url,ok,ms}]}
+    events:[],           // {type:'outage'|'gap', start, end, people}
+    consecFail:0, down:false, lastCheckAt:null,
+    wakeLock:null, targets:[]
+  };
+
+  var pending = null;       // 復元待ちの前回セッション
+  var storageWarned = false;
+
+  /* ---------- 時刻 ---------- */
+  function pad(n){ return (n<10?"0":"")+n; }
+  function hhmmss(d){ return pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds()); }
+  function hhmm(d){ return pad(d.getHours())+":"+pad(d.getMinutes()); }
+  function ymd(d){ return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
+  function md(d){ return (d.getMonth()+1)+"/"+d.getDate(); }
+  function stamp(d){ return ymd(d)+" "+hhmmss(d); }
+  function dur(ms){
+    var s = Math.max(0, Math.round(ms/1000));
+    return Math.floor(s/3600)+":"+pad(Math.floor(s/60)%60)+":"+pad(s%60);
+  }
+
+  /* ---------- 疎通確認 ---------- */
+  function bust(url){ return url + (url.indexOf("?")>=0 ? "&" : "?") + "_=" + Date.now(); }
+
+  function probeFetch(url, ms){
+    return new Promise(function(resolve){
+      var done=false, ctrl = (typeof AbortController!=="undefined") ? new AbortController() : null;
+      var t = setTimeout(function(){ if(!done){ done=true; if(ctrl) ctrl.abort(); resolve(false); } }, ms);
+      var opt = { mode:"no-cors", cache:"no-store" };
+      if(ctrl) opt.signal = ctrl.signal;
+      fetch(bust(url), opt).then(function(){
+        if(!done){ done=true; clearTimeout(t); resolve(true); }
+      })["catch"](function(){
+        if(!done){ done=true; clearTimeout(t); resolve(false); }
+      });
+    });
+  }
+
+  function probeImage(url, ms){
+    return new Promise(function(resolve){
+      var done=false, img=new Image();
+      function finish(ok){
+        if(done) return;
+        done=true; clearTimeout(t);
+        img.onload=null; img.onerror=null;   // src は触らない(空文字はページ自身を再取得しうる)
+        resolve(ok);
+      }
+      var t=setTimeout(function(){ finish(false); }, ms);
+      img.onload=function(){ finish(true); };
+      img.onerror=function(){ finish(false); };
+      img.src = bust(url);
+    });
+  }
+
+  function probe(url, ms){
+    if(state.method==="image") return probeImage(url, ms);
+    if(state.method==="fetch") return probeFetch(url, ms);
+    return probeFetch(url, ms).then(function(ok){
+      if(ok){ state.method="fetch"; return true; }
+      return probeImage(url, ms).then(function(ok2){ if(ok2) state.method="image"; return ok2; });
+    });
+  }
+
+  /* ---------- 設定 ---------- */
+  function readTargets(){
+    return $("targets").value.split("\n")
+      .map(function(s){ return s.trim(); })
+      .filter(function(s){ return s.length>0; });
+  }
+  function label(url){
+    try{ return new URL(url).host || url; }catch(e){ return url.replace(/^https?:\/\//,"").split("/")[0] || url; }
+  }
+  function num(id, def){ var v = parseInt($(id).value,10); return isNaN(v) ? def : v; }
+
+  var CONFIG_IDS = ["targets","interval","timeout","threshold"];
+  function saveConfig(){
+    try{
+      localStorage.setItem(CONFIG_KEY, JSON.stringify({
+        targets:$("targets").value, interval:$("interval").value,
+        timeout:$("timeout").value, threshold:$("threshold").value,
+        wake:$("wake").checked, dim:$("dim").checked
+      }));
+    }catch(e){}
+  }
+  function loadConfig(){
+    var raw;
+    try{ raw = localStorage.getItem(CONFIG_KEY); }catch(e){ return; }
+    if(!raw) return;
+    try{
+      var c = JSON.parse(raw);
+      CONFIG_IDS.forEach(function(k){ if(typeof c[k]==="string" && c[k]!=="") $(k).value = c[k]; });
+      if(typeof c.wake==="boolean") $("wake").checked = c.wake;
+      if(typeof c.dim==="boolean")  $("dim").checked  = c.dim;
+    }catch(e){}
+  }
+
+  /* ---------- 端末内への保存 ---------- */
+  function encode(trimTo){
+    var samples = trimTo===null ? [] : state.samples.slice(-trimTo);
+    return {
+      v:1, savedAt:Date.now(),
+      startedAt: state.startedAt ? state.startedAt.getTime() : null,
+      checks: state.checks,
+      targets: state.targets.slice(),
+      events: state.events.map(function(e){
+        return [e.type, e.start.getTime(), e.end ? e.end.getTime() : null, e.people||""];
+      }),
+      samples: samples.map(function(s){
+        return [s.t.getTime(), s.ok?1:0, s.per.map(function(p){ return [p.ok?1:0, p.ms]; })];
+      })
+    };
+  }
+
+  function decode(o){
+    if(!o || o.v!==1) return null;
+    var targets = Array.isArray(o.targets) ? o.targets : [];
+    return {
+      savedAt: o.savedAt || null,
+      startedAt: o.startedAt ? new Date(o.startedAt) : null,
+      checks: o.checks || 0,
+      targets: targets,
+      events: (o.events||[]).map(function(a){
+        return { type:a[0], start:new Date(a[1]), end:a[2]?new Date(a[2]):null, people:a[3]||"" };
+      }),
+      samples: (o.samples||[]).map(function(a){
+        return {
+          t:new Date(a[0]), ok:!!a[1],
+          per:(a[2]||[]).map(function(p,i){ return { url:targets[i]||("#"+i), ok:!!p[0], ms:p[1] }; })
+        };
+      })
+    };
+  }
+
+  var lastPersist = 0;
+  function persist(){
+    lastPersist = Date.now();
+    // 容量が尽きたら記録(events)を優先し、波形(samples)を切り詰める。
+    var steps = [3000, 600, null];
+    for(var i=0;i<steps.length;i++){
+      try{
+        localStorage.setItem(SESSION_KEY, JSON.stringify(encode(steps[i])));
+        return true;
+      }catch(e){}
+    }
+    if(!storageWarned){
+      storageWarned = true;
+      alertNote("端末の保存領域がいっぱいで、記録を自動保存できませんでした。「切断記録を保存」でCSVに書き出してください。");
+    }
+    return false;
+  }
+  function clearPersisted(){ try{ localStorage.removeItem(SESSION_KEY); }catch(e){} }
+
+  function loadPending(){
+    var raw;
+    try{ raw = localStorage.getItem(SESSION_KEY); }catch(e){ return null; }
+    if(!raw) return null;
+    try{ return decode(JSON.parse(raw)); }catch(e){ return null; }
+  }
+
+  function showResume(p){
+    if(!p || !p.startedAt || (p.events.length===0 && p.samples.length===0)) return;
+    pending = p;
+    var outs = p.events.filter(function(e){ return e.type==="outage"; }).length;
+    $("resumeText").textContent =
+      "前回の記録が残っています。" + md(p.startedAt) + " " + hhmm(p.startedAt) + " 開始、" +
+      "チェック " + p.checks + " 回、切断 " + outs + " 件" +
+      (p.savedAt ? "（最終保存 " + hhmm(new Date(p.savedAt)) + "）" : "") + "。";
+    $("resumeNote").classList.remove("hidden");
+  }
+  function hideResume(){ pending = null; $("resumeNote").classList.add("hidden"); }
+
+  /* ---------- 画面スリープ防止 ---------- */
+  function acquireWake(){
+    if(!$("wake").checked || !("wakeLock" in navigator)) return;
+    navigator.wakeLock.request("screen").then(function(w){ state.wakeLock=w; })["catch"](function(){});
+  }
+  function releaseWake(){
+    if(state.wakeLock){ try{ state.wakeLock.release(); }catch(e){} state.wakeLock=null; }
+  }
+
+  /* ---------- 監視ループ ---------- */
+  function start(resume){
+    state.targets = readTargets();
+    if(state.targets.length===0){ alertNote("監視先が空です。設定に URL を1行以上入れてください。"); return; }
+    clearNote();
+
+    if(resume && pending){
+      state.startedAt = pending.startedAt;
+      state.checks    = pending.checks;
+      state.events    = pending.events;
+      state.samples   = pending.samples;
+      // 中断中に開いたままだった切断は、最後に確認できた時刻で閉じる。
+      var lastKnown = state.samples.length ? state.samples[state.samples.length-1].t : new Date(pending.savedAt||Date.now());
+      state.events.forEach(function(e){ if(e.type==="outage" && e.end===null) e.end = lastKnown; });
+      // 記録が途切れていた区間は「計測中断」として残す。
+      var gapFrom = lastKnown.getTime(), gapTo = Date.now();
+      if(gapTo - gapFrom > 60000) state.events.push({ type:"gap", start:new Date(gapFrom), end:new Date(gapTo), people:"" });
+    }else{
+      state.startedAt = new Date();
+      state.checks = 0;
+      state.samples = [];
+      state.events = [];
+    }
+    hideResume();
+
+    state.running=true; state.consecFail=0; state.down=false; state.lastCheckAt=null;
+    $("btnRun").textContent="監視を停止"; $("btnRun").classList.add("running");
+    $("targets").disabled = true;
+    refreshExportButtons();
+    buildLamps(); acquireWake(); resetIdle();
+    lastChart = 0; lastSig = "";
+    persist(); render();
+    tick();
+  }
+
+  function stop(){
+    state.running=false;
+    if(state.timer){ clearTimeout(state.timer); state.timer=null; }
+    if(state.down) closeEvent(new Date());
+    releaseWake(); undim(); clearTimeout(idleT);
+    $("btnRun").textContent="監視を開始"; $("btnRun").classList.remove("running");
+    $("targets").disabled = false;
+    persist(); render();
+  }
+
+  function tick(){
+    if(!state.running) return;
+    var intervalMs = num("interval",30)*1000;
+    var timeoutMs  = num("timeout",8)*1000;
+    var now = Date.now();
+
+    // 計測が止まっていた区間を記録
+    if(state.lastCheckAt && (now - state.lastCheckAt) > intervalMs*2.5){
+      state.events.push({ type:"gap", start:new Date(state.lastCheckAt), end:new Date(now), people:"" });
+      lastChart = 0;
+    }
+    state.lastCheckAt = now;
+
+    var t0 = Date.now();
+    Promise.all(state.targets.map(function(u){
+      var s=Date.now();
+      return probe(u, timeoutMs).then(function(ok){ return { url:u, ok:ok, ms:Date.now()-s }; });
+    })).then(function(per){
+      if(!state.running) return;
+      var ok = per.some(function(r){ return r.ok; });
+      var when = new Date();
+      state.checks++;
+      state.samples.push({ t:when, ok:ok, per:per });
+      if(state.samples.length>20000) state.samples.splice(0, 5000);
+
+      if(ok){
+        state.consecFail=0;
+        if(state.down){ closeEvent(when); lastChart=0; }
+      }else{
+        state.consecFail++;
+        if(!state.down && state.consecFail >= num("threshold",2)){
+          state.down=true;
+          var back = (state.consecFail-1) * (intervalMs/1000);
+          state.events.push({ type:"outage", start:new Date(when.getTime()-back*1000), end:null, people:"" });
+          lastChart=0;
+          undim();
+          persist();
+        }
+      }
+      updateLamps(per);
+      render();
+      var wait = Math.max(1000, intervalMs - (Date.now()-t0));
+      state.timer = setTimeout(tick, wait);
+    });
+  }
+
+  function closeEvent(when){
+    for(var i=state.events.length-1;i>=0;i--){
+      if(state.events[i].type==="outage" && state.events[i].end===null){ state.events[i].end=when; break; }
+    }
+    state.down=false; state.consecFail=0;
+    persist();
+  }
+
+  /* ---------- 表示 ---------- */
+  function alertNote(msg){ var n=$("alertNote"); n.textContent=msg; n.classList.remove("hidden"); }
+  function clearNote(){ $("alertNote").classList.add("hidden"); }
+
+  function refreshExportButtons(){
+    var has = state.running || state.events.length>0 || state.samples.length>0;
+    $("btnCsvEvents").disabled = !has;
+    $("btnCsvAll").disabled = !has;
+  }
+
+  function buildLamps(){
+    var ul=$("lamps"); ul.innerHTML="";
+    state.targets.forEach(function(u,i){
+      var li=document.createElement("li");
+      var dot=document.createElement("span"); dot.className="dot"; dot.id="dot"+i;
+      var txt=document.createElement("span"); txt.textContent=label(u);
+      li.appendChild(dot); li.appendChild(txt);
+      ul.appendChild(li);
+    });
+  }
+  function updateLamps(per){
+    per.forEach(function(r,i){
+      var d=$("dot"+i); if(!d) return;
+      d.className = "dot " + (r.ok?"ok":"ng");
+    });
+  }
+
+  function render(){
+    var now=new Date();
+    $("clock").textContent = hhmmss(now);
+
+    var lamp=$("lamp"), word=$("stateWord"), since=$("stateSince");
+    if(!state.running){
+      lamp.className="lamp idle"; word.textContent="停止中"; word.classList.remove("ng"); since.textContent="";
+    }else if(state.down){
+      lamp.className="lamp ng"; word.textContent="切断中"; word.classList.add("ng");
+      var ev=lastOpen(); since.textContent = ev ? dur(now-ev.start)+" 経過" : "";
+    }else{
+      lamp.className="lamp ok"; word.textContent="接続中"; word.classList.remove("ng");
+      var lastEnd = lastRecovery();
+      since.textContent = lastEnd ? dur(now-lastEnd)+" 継続" : (state.startedAt ? dur(now-state.startedAt)+" 継続" : "");
+    }
+
+    $("sStart").textContent   = state.startedAt ? hhmm(state.startedAt) : "--:--";
+    $("sElapsed").textContent = state.startedAt ? dur(now-state.startedAt) : "0:00:00";
+    $("sChecks").textContent  = state.checks;
+    var outs = state.events.filter(function(e){ return e.type==="outage"; });
+    $("sEvents").textContent  = outs.length;
+    var total = outs.reduce(function(a,e){ return a + ((e.end||now) - e.start); },0);
+    $("sDown").textContent    = (total/60000).toFixed(1);
+
+    renderEvents();
+    if(Date.now()-lastChart > 4500){ lastChart=Date.now(); drawChart(); }
+  }
+  var lastChart=0;
+
+  function lastOpen(){
+    for(var i=state.events.length-1;i>=0;i--){
+      if(state.events[i].type==="outage" && state.events[i].end===null) return state.events[i];
+    }
+    return null;
+  }
+  function lastRecovery(){
+    for(var i=state.events.length-1;i>=0;i--){
+      if(state.events[i].type==="outage" && state.events[i].end) return state.events[i].end;
+    }
+    return null;
+  }
+
+  var lastSig="";
+  function eventSig(){
+    return state.events.map(function(e){
+      return e.type+"|"+e.start.getTime()+"|"+(e.end?e.end.getTime():"-");
+    }).join(";");
+  }
+
+  function renderEvents(){
+    var body=$("eventsBody"), tbl=$("eventsTable"), msg=$("emptyMsg");
+    if(state.events.length===0){ tbl.style.display="none"; msg.style.display="block"; lastSig=""; return; }
+    tbl.style.display="table"; msg.style.display="none";
+
+    var sig=eventSig();
+    if(sig===lastSig){
+      var liveCell=body.querySelector(".live-min");
+      var open=lastOpen();
+      if(liveCell && open) liveCell.textContent=((new Date()-open.start)/60000).toFixed(1);
+      return;
+    }
+    lastSig=sig;
+
+    var focused = document.activeElement;
+    var focusIdx = (focused && focused.classList && focused.classList.contains("people"))
+      ? focused.getAttribute("data-i") : null;
+
+    body.innerHTML="";
+    state.events.slice().reverse().forEach(function(e){
+      var idx = state.events.indexOf(e);
+      var tr=document.createElement("tr");
+      var live = (e.type==="outage" && e.end===null);
+      tr.className = e.type==="gap" ? "gap" : (live ? "live" : "");
+      var mins = ((e.end||new Date()) - e.start)/60000;
+      tr.innerHTML =
+        '<td class="num">'+ymd(e.start)+'</td>'+
+        '<td class="num">'+hhmmss(e.start)+'</td>'+
+        '<td class="num">'+(e.end?hhmmss(e.end):"継続中")+'</td>'+
+        '<td class="num'+(live?" live-min":"")+'">'+mins.toFixed(1)+'</td>'+
+        '<td><input class="people" type="number" min="0" inputmode="numeric" aria-label="在室人数" data-i="'+idx+'" value="'+(e.people||"")+'"></td>'+
+        '<td>'+(e.type==="gap"?"計測中断":"切断")+'</td>';
+      body.appendChild(tr);
+    });
+    refreshExportButtons();
+
+    if(focusIdx!==null){
+      var back = body.querySelector('.people[data-i="'+focusIdx+'"]');
+      if(back){ back.focus(); try{ back.selectionStart = back.value.length; }catch(err){} }
+    }
+  }
+
+  document.addEventListener("input", function(ev){
+    var el=ev.target;
+    if(el.classList && el.classList.contains("people")){
+      var i=parseInt(el.getAttribute("data-i"),10);
+      if(state.events[i]){ state.events[i].people=el.value; persist(); }
+      return;
+    }
+    if(el.id && CONFIG_IDS.indexOf(el.id)>=0) saveConfig();
+  });
+  ["wake","dim"].forEach(function(id){
+    $(id).addEventListener("change", function(){
+      saveConfig();
+      if(id==="wake"){ if($("wake").checked && state.running) acquireWake(); else releaseWake(); }
+      if(id==="dim") resetIdle();
+    });
+  });
+
+  /* ---------- 記録紙 ---------- */
+  function drawChart(){
+    var c=$("chart"), ctx=c.getContext("2d");
+    var dpr=window.devicePixelRatio||1;
+    var w=c.clientWidth, h=c.clientHeight;
+    if(!w || !h) return;
+    if(c.width!==Math.round(w*dpr)){ c.width=Math.round(w*dpr); c.height=Math.round(h*dpr); }
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,w,h);
+    ctx.fillStyle="#ffffff"; ctx.fillRect(0,0,w,h);
+
+    var span=60*60*1000, now=Date.now(), t0=now-span;
+    var x = function(t){ return (t-t0)/span*w; };
+    var base=h-16, hi=base*0.30, lo=base*0.78;
+
+    // 10分ごとの時刻目盛り
+    ctx.strokeStyle="#C7D2C2"; ctx.lineWidth=1;
+    ctx.fillStyle="#5B685F"; ctx.font="11px "+ "ui-monospace, monospace";
+    var step=10*60*1000;
+    var first=Math.ceil(t0/step)*step;
+    for(var t=first;t<=now;t+=step){
+      var px=Math.round(x(t))+.5;
+      ctx.beginPath(); ctx.moveTo(px,0); ctx.lineTo(px,base); ctx.stroke();
+      ctx.fillText(hhmm(new Date(t)), px+3, h-4);
+    }
+
+    // 目盛りは「接続」「切断」の2水準だけ。等分割の飾り罫は引かない。
+    ctx.save();
+    ctx.setLineDash([3,3]); ctx.strokeStyle="#E2E8E0"; ctx.lineWidth=1;
+    [hi, lo].forEach(function(y){
+      var py=Math.round(y)+.5;
+      ctx.beginPath(); ctx.moveTo(0,py); ctx.lineTo(w,py); ctx.stroke();
+    });
+    ctx.restore();
+
+    if(state.startedAt){
+      // 障害・中断の帯
+      state.events.forEach(function(e){
+        var s=Math.max(e.start.getTime(), t0);
+        var en=Math.min((e.end?e.end.getTime():now), now);
+        if(en<=t0) return;
+        var x1=x(s), x2=x(en);
+        ctx.fillStyle = e.type==="gap" ? "rgba(194,94,0,.20)" : "rgba(176,33,43,.22)";
+        ctx.fillRect(x1, 0, Math.max(2,x2-x1), base);
+        ctx.fillStyle = e.type==="gap" ? "#C25E00" : "#B0212B";
+        ctx.fillRect(x1, 0, Math.max(1.5,Math.min(2,x2-x1)), base);
+      });
+
+      // トレース
+      var pts=state.samples.filter(function(s){ return s.t.getTime()>=t0; });
+      if(pts.length){
+        ctx.strokeStyle="#1C2620"; ctx.lineWidth=2; ctx.lineJoin="round";
+        ctx.beginPath();
+        var started=false;
+        pts.forEach(function(s){
+          var px=x(s.t.getTime()), py=s.ok?hi:lo;
+          if(!started){ ctx.moveTo(px,py); started=true; } else { ctx.lineTo(px,py); }
+        });
+        ctx.stroke();
+        var last=pts[pts.length-1];
+        ctx.fillStyle=last.ok?"#2C6B48":"#B0212B";
+        ctx.beginPath(); ctx.arc(Math.min(x(last.t.getTime()), w-5), last.ok?hi:lo, 4, 0, Math.PI*2); ctx.fill();
+      }
+    }
+
+    // 水準のラベル(トレースの上に、紙色の下敷きを敷いて置く)
+    ctx.font="11px "+"ui-monospace, monospace"; ctx.textBaseline="middle";
+    [[hi,"接続","#2C6B48"],[lo,"切断","#B0212B"]].forEach(function(row){
+      var tw=ctx.measureText(row[1]).width;
+      ctx.fillStyle="#ffffff"; ctx.fillRect(2, row[0]-7, tw+6, 14);
+      ctx.fillStyle=row[2]; ctx.fillText(row[1], 5, row[0]);
+    });
+    ctx.textBaseline="alphabetic";
+
+    ctx.strokeStyle="#A9B9A4"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(0,base+.5); ctx.lineTo(w,base+.5); ctx.stroke();
+  }
+
+  /* ---------- CSV ---------- */
+  var downloads = null;
+  if(window.claude && typeof window.claude.use === "function"){
+    window.claude.use("downloads").then(function(d){ downloads = d; })["catch"](function(){});
+  }
+
+  function toCsv(rows){
+    return rows.map(function(r){
+      return r.map(function(v){
+        v = (v===null||v===undefined) ? "" : String(v);
+        return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v;
+      }).join(",");
+    }).join("\r\n");
+  }
+
+  // Artifact のビューアはページ発のダウンロードを止めるため、まず downloads capability を使い、
+  // 素のブラウザで開かれたときだけ Blob + <a download> に落とす。
+  function blobFallback(name, blob){
+    try{
+      var a=document.createElement("a");
+      a.href=URL.createObjectURL(blob); a.download=name;
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      return true;
+    }catch(e){ return false; }
+  }
+
+  var saving=false;
+  function saveCsv(name, rows){
+    if(saving) return;
+    saving=true;
+    var blob = new Blob(["﻿"+toCsv(rows)], {type:"text/csv;charset=utf-8;"});
+    var done = function(){ saving=false; };
+
+    if(!downloads){
+      if(!blobFallback(name, blob)) alertNote("このブラウザでは保存できませんでした。");
+      else clearNote();
+      done(); return;
+    }
+    downloads.save({ filename:name, data:blob }).then(function(){
+      clearNote(); done();
+    })["catch"](function(err){
+      var code = err && err.code;
+      if(code==="declined"){ clearNote(); }
+      else if(code==="rate_limited"){ alertNote("前の保存が終わってから、もう一度押してください。"); }
+      else if(code==="too_large"){ alertNote("記録が大きすぎて保存できませんでした。「切断記録を保存」だけを先に書き出してください。"); }
+      else if(!blobFallback(name, blob)){ alertNote("保存できませんでした。しばらくしてからもう一度お試しください。"); }
+      done();
+    });
+  }
+
+  function fname(kind){
+    var d=new Date();
+    return "wifi_"+kind+"_"+ymd(d).replace(/-/g,"")+"_"+pad(d.getHours())+pad(d.getMinutes())+".csv";
+  }
+
+  function buildEventRows(events, targets){
+    var rows=[["発生日","切断開始","復旧時刻","停止時間(分)","在室人数","種別","監視先"]];
+    var tg=targets.join(" / ");
+    events.forEach(function(e){
+      rows.push([ ymd(e.start), hhmmss(e.start), e.end?hhmmss(e.end):"",
+        (((e.end||new Date())-e.start)/60000).toFixed(1), e.people||"",
+        e.type==="gap"?"計測中断":"切断", tg ]);
+    });
+    if(rows.length===1) rows.push(["","","","","","記録なし",tg]);
+    return rows;
+  }
+
+  function buildSampleRows(samples, targets){
+    var rows=[["日時","総合判定"]
+      .concat(targets.map(function(u){ return label(u)+" 判定"; }))
+      .concat(targets.map(function(u){ return label(u)+" 応答(ms)"; }))];
+    samples.forEach(function(s){
+      var r=[stamp(s.t), s.ok?"OK":"NG"];
+      targets.forEach(function(u){
+        var m=s.per.filter(function(p){ return p.url===u; })[0];
+        r.push(m ? (m.ok?"OK":"NG") : "");
+      });
+      targets.forEach(function(u){
+        var m=s.per.filter(function(p){ return p.url===u; })[0];
+        r.push(m ? m.ms : "");
+      });
+      rows.push(r);
+    });
+    return rows;
+  }
+
+  $("btnCsvEvents").addEventListener("click", function(){
+    saveCsv(fname("events"), buildEventRows(state.events, state.targets));
+  });
+  $("btnCsvAll").addEventListener("click", function(){
+    saveCsv(fname("samples"), buildSampleRows(state.samples, state.targets));
+  });
+
+  /* ---------- 前回セッションの扱い ---------- */
+  $("btnResume").addEventListener("click", function(){ start(true); });
+  $("btnResumeSave").addEventListener("click", function(){
+    if(!pending) return;
+    saveCsv(fname("events"), buildEventRows(pending.events, pending.targets));
+  });
+  $("btnResumeDrop").addEventListener("click", function(){
+    if(!window.confirm("前回の記録を削除します。よろしいですか？")) return;
+    clearPersisted(); hideResume();
+  });
+
+  /* ---------- 接続テスト ---------- */
+  $("btnTest").addEventListener("click", function(){
+    var urls=readTargets(), out=$("testOut"), ms=num("timeout",8)*1000;
+    if(urls.length===0){ out.textContent="監視先が空です。"; return; }
+    $("btnTest").disabled=true; out.textContent="確認中…";
+    var lines=[], fetchOK=0, imgOK=0;
+    var jobs=urls.map(function(u){
+      return Promise.all([probeFetch(u,ms), probeImage(u,ms)]).then(function(r){
+        if(r[0]) fetchOK++;
+        if(r[1]) imgOK++;
+        lines.push(label(u)+"  fetch:"+(r[0]?"○":"×")+"  画像:"+(r[1]?"○":"×"));
+      });
+    });
+    Promise.all(jobs).then(function(){
+      if(fetchOK>0){ state.method="fetch"; lines.push("→ fetch 方式で監視します。"); }
+      else if(imgOK>0){ state.method="image"; lines.push("→ 画像方式で監視します。"); }
+      else { state.method="auto"; lines.push("→ どの監視先にも届きませんでした。URL と Wi-Fi 接続を確認してください。"); }
+      out.textContent=lines.join("\n");
+      $("btnTest").disabled=false;
+    });
+  });
+
+  /* ---------- 減光（焼き付き・電力対策） ---------- */
+  var idleT=null, dimmed=false, driftN=0;
+  function doDim(){ if(!state.running) return; dimmed=true; $("dimLayer").style.display="flex"; }
+  function undim(){ dimmed=false; $("dimLayer").style.display="none"; }
+  function resetIdle(){
+    if(dimmed) undim();
+    clearTimeout(idleT);
+    if($("dim").checked && state.running) idleT=setTimeout(doDim, 180000);
+  }
+  ["touchstart","mousedown","keydown"].forEach(function(ev){
+    document.addEventListener(ev, resetIdle, {passive:true});
+  });
+  function renderDim(){
+    if(!dimmed) return;
+    var w=$("dimWord"), sb=$("dimSub");
+    w.textContent = state.down ? "切断中" : "監視中";
+    w.className = state.down ? "ng" : "";
+    var outs=state.events.filter(function(e){ return e.type==="outage"; }).length;
+    sb.textContent = hhmmss(new Date())+"　切断 "+outs+" 件";
+    driftN=(driftN+1)%40;
+    $("dimBox").style.transform="translate("+(driftN-20)*3+"px,"+Math.round(Math.sin(driftN/6)*22)+"px)";
+  }
+
+  /* ---------- 前面・背面 ---------- */
+  document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState==="visible"){
+      if(state.running) acquireWake();
+      lastChart=0;
+    }else if(state.running){
+      persist();
+    }
+  });
+
+  window.addEventListener("beforeunload", function(e){
+    if(state.running){ persist(); e.preventDefault(); e.returnValue=""; }
+  });
+  window.addEventListener("resize", function(){ lastChart=0; drawChart(); });
+
+  $("btnRun").addEventListener("click", function(){
+    if(state.running){ stop(); return; }
+    if(pending && !window.confirm("前回の記録を破棄して、新しく監視を始めます。よろしいですか？")) return;
+    if(pending) clearPersisted();
+    start(false);
+  });
+
+  setInterval(function(){
+    render();
+    renderDim();
+    if(state.running && Date.now()-lastPersist > 5000) persist();
+  }, 1000);
+
+  /* ---------- 起動 ---------- */
+  loadConfig();
+  showResume(loadPending());
+  refreshExportButtons();
+  render();
+})();
+</script>

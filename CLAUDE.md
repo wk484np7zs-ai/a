@@ -4,8 +4,14 @@
 
 ## リポジトリの概要
 
-分子栄養学カウンセラー向けのリードマグネット(見込み客獲得用の無料配布物)一式。
-コードベースというよりは **成果物リポジトリ** で、`lead-magnet/` 以下がすべて。
+コードベースというよりは **成果物リポジトリ**。独立した2つの成果物が入っている。
+
+1. `lead-magnet/` — 分子栄養学カウンセラー向けのリードマグネット(見込み客獲得用の無料配布物)一式
+2. `wifi-logger/` — トレーニング室のタブレット用 Wi-Fi切断ロガー(単一HTML)
+
+両者に依存関係はない。テストだけが `tests/` で同居している(同じ Artifact スケルトンを共有するため)。
+
+### `lead-magnet/`
 
 | ファイル | 役割 |
 | --- | --- |
@@ -13,7 +19,14 @@
 | `lead-magnet/隠れ栄養不足度セルフチェックリスト.pdf` | 生成済みの配布用PDF(A4・全7ページ) |
 | `lead-magnet/landing-page/index.html` | メール登録フォーム付きLP。Artifact として公開する前提の単一HTML |
 | `lead-magnet/README.md` | エンドユーザー(カウンセラー本人)向けの手順書 |
-| `tests/` | LPのPlaywrightテスト(リポジトリ直下の `npm test` で実行) |
+| `tests/` | Playwrightテスト(リポジトリ直下の `npm test` で実行) |
+
+### `wifi-logger/`
+
+| ファイル | 役割 |
+| --- | --- |
+| `wifi-logger/index.html` | ロガー本体。Artifact として公開する前提の単一HTML |
+| `wifi-logger/README.md` | 現場(タブレットを操作する人)向けの手順書 |
 
 文言・UIはすべて日本語。コミットメッセージも日本語。
 
@@ -92,6 +105,37 @@ PDF・LPの両方に、公開前に差し替えが必要な箇所が残ってい
 - `LEAD_WEBHOOK_URL`(空文字。設定するとフォーム送信時に氏名・メールを `no-cors` POST する)
 - `FEEDBACK_WEBHOOK_URL`(空文字。**設定しないとご感想が記録されない**)
 
+## Wi-Fi切断ロガー (`wifi-logger/index.html`)
+
+LPと同じく **Artifact 前提の単一HTML**。`<!doctype>` / `<html>` / `<head>` / `<body>` を持たない。
+
+- **外部リソースをひとつも読み込まない。** Wi-Fiが切れる現場で使う道具なので、Google Fonts も使わず
+  端末内蔵の和文ゴシックだけで組んでいる。ここに外部依存を足さないこと。
+- **配色は記録紙(ストリップチャート)の一つの世界に寄せており、ダークテーマを持たない。**
+  夜間は減光レイヤー(`#dimLayer`)が担当する。意図的な単一テーマなので、
+  `prefers-color-scheme` のブロックを足す前にこの前提を確認すること。
+- **CSV保存は Artifact の `downloads` capability に依存する。** `saveCsv()` はまず
+  `window.claude.use("downloads")` で得た `save()` を使い、失敗したときだけ Blob + `<a download>` に
+  フォールバックする。**publish時に `capabilities: {downloads: true}` を宣言しないとビューア内で保存が効かない。**
+- 疎通確認は `fetch(mode:"no-cors")` → 画像読み込みの順にフォールバックする(`probe()`)。
+  no-cors の fetch は 404 でも resolve するが、**疎通の有無を見るのが目的なのでこれで正しい**。
+
+### 記録の保存(重要)
+
+記録は `localStorage` に数秒ごと保存される(セッション: `wifi-logger.session.v1`、
+設定: `wifi-logger.config.v1`)。終日動かすタブレットで、リロードや電池切れで記録が消えないための要。
+
+- 保存形式は `encode()` / `decode()` の配列圧縮。**キーの順番を変えたら `v` を上げること。**
+- 容量が尽きたら波形(`samples`)を 3000 → 600 → 0 と切り詰め、切断記録(`events`)を最後まで守る。
+- 起動時に前回セッションが見つかると復元バナーが出る。`破棄` を押すまで消えない。
+  `続きから再開` では、開いたままの切断を最後の確認時刻で閉じ、途切れていた区間を「計測中断」として足す。
+
+### やってはいけないこと
+
+- **自動でCSVをダウンロードさせない。** `downloads` capability は毎回ビューアの確認を求めるため、
+  無人のタブレットでは保存されない。自動保存は localStorage、ファイル書き出しは手動、という分担を崩さないこと。
+- 監視中に監視先(`#targets`)を編集可能にしないこと。記録とCSVの監視先がずれる。
+
 ## テスト
 
 ```bash
@@ -112,6 +156,9 @@ npx playwright test tests/feedback.spec.js   # 単一ファイル
   `var FEEDBACK_WEBHOOK_URL = "";` を文字列置換で差し替える。この宣言の書き方を変えると
   harness が例外を投げて教えてくれる。
 - `tests/lead-form.spec.js` はPDF配布(このLPの本来の目的)の回帰テスト。LPを触ったら必ず通すこと。
+- `tests/wifi-logger.spec.js` はロガーの回帰テスト。監視開始 → 切断検知 → 復旧 → CSV → 再起動後の復元までを
+  一続きで確かめる。`openWifiLogger()` が返す `setOnline(bool)` で回線の切断/復旧を再現する。
+  監視間隔の下限が5秒のため、実時間で30秒ほどかかる(`test.setTimeout(90000)`)。
 
 ## 健康関連コンテンツについての注意
 
