@@ -117,8 +117,15 @@ LPと同じく **Artifact 前提の単一HTML**。`<!doctype>` / `<html>` / `<he
 - **CSV保存は Artifact の `downloads` capability に依存する。** `saveCsv()` はまず
   `window.claude.use("downloads")` で得た `save()` を使い、失敗したときだけ Blob + `<a download>` に
   フォールバックする。**publish時に `capabilities: {downloads: true}` を宣言しないとビューア内で保存が効かない。**
-- 疎通確認は `fetch(mode:"no-cors")` → 画像読み込みの順にフォールバックする(`probe()`)。
-  no-cors の fetch は 404 でも resolve するが、**疎通の有無を見るのが目的なのでこれで正しい**。
+- **疎通確認はビューアの CSP を前提に組んである(`probe()`)。** Artifact のビューアは外部ホストへの
+  `fetch` / 画像 / メディアをすべて止め、`<script>` だけを cdnjs / jsDelivr 等の限られた CDN から通す。
+  そのため既定の監視先は cdnjs と jsDelivr の小さな JS(js-cookie 3.0.5)で、`.js` の URL は `<script>` 読み込み、
+  それ以外は `fetch(no-cors)` → 画像の順に試し、届いた方式を `state.methodByUrl` に URL ごとに覚える。
+  **既定の監視先を画像や favicon に戻さないこと**(初版でそれをやって「接続テストが×」になった)。
+  `loadConfig()` は初版の既定値 `google.com/favicon.ico` が保存されていたら捨てる。
+  no-cors の fetch は 404 でも resolve するが、疎通の有無を見るのが目的なのでこれで正しい。
+- `tests/harness.js` の `buildWifiPage()` はこの CSP を `<meta http-equiv>` で再現する(`VIEWER_CSP`)。
+  ロガーのテストは必ずこの条件で通すこと。LP の skeleton には被せていない(LP の webhook POST が対象外になるため)。
 
 ### 記録の保存(重要)
 

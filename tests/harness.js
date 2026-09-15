@@ -52,12 +52,27 @@ function buildPage(options = {}) {
   return SKELETON_HEAD + body + SKELETON_FOOT;
 }
 
+// Artifact のビューアが課す CSP の近似。外部ホストへの fetch / 画像 / メディアは止まり、
+// <script> は限られた CDN からだけ通る。ロガーの疎通確認はこの条件で動かなければ意味がない。
+const VIEWER_CSP = [
+  "default-src 'self' data: blob:",
+  "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://cdn.tailwindcss.com https://code.jquery.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: blob:",
+  "connect-src 'self'",
+].join('; ');
+
 /**
  * Wi-Fi切断ロガーを、同じ Artifact スケルトンで包んで返す。
- * こちらは差し替えるプレースホルダーを持たないので、包むだけ。
+ * 差し替えるプレースホルダーは持たない代わりに、ビューア相当の CSP を meta で被せる。
  */
 function buildWifiPage() {
-  return SKELETON_HEAD + fs.readFileSync(WIFI_PAGE_PATH, 'utf8') + SKELETON_FOOT;
+  const head = SKELETON_HEAD.replace(
+    '<meta charset="utf-8">',
+    `<meta charset="utf-8">\n<meta http-equiv="Content-Security-Policy" content="${VIEWER_CSP}">`
+  );
+  return head + fs.readFileSync(WIFI_PAGE_PATH, 'utf8') + SKELETON_FOOT;
 }
 
-module.exports = { buildPage, buildWifiPage, PAGE_PATH, WIFI_PAGE_PATH, FEEDBACK_WEBHOOK_DECL };
+module.exports = { buildPage, buildWifiPage, PAGE_PATH, WIFI_PAGE_PATH, FEEDBACK_WEBHOOK_DECL, VIEWER_CSP };

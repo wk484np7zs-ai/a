@@ -51,9 +51,18 @@ const test = base.extend({
     const open = async (options = {}) => {
       online = options.online !== false;
 
-      // 監視先は実在のホストなので、テストでは必ず横取りする。
-      await page.route(/www\.google\.com/, (route) => {
+      // 監視先は実在の CDN なので、テストでは必ず横取りする。
+      // CSP に弾かれた要求はここまで来ない(ブラウザが発行前に止める)。
+      await page.route(/cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net/, (route) => {
         if (!online) return route.abort('failed');
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/javascript',
+          body: '/* probe */',
+        });
+      });
+      // 既定以外の監視先(画像など)を試すテスト用。CSP が正しく効いていれば要求は届かない。
+      await page.route(/www\.google\.com/, (route) => {
         return route.fulfill({
           status: 200,
           contentType: 'image/gif',

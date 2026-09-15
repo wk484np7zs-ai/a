@@ -227,8 +227,9 @@
 
       <div class="field">
         <label for="targets">監視先（1行に1件）</label>
-        <textarea id="targets" spellcheck="false">https://www.google.com/favicon.ico</textarea>
-        <p class="hint">外部インターネットの疎通を見ます。館内ゲートウェイや AP の画像 URL を追加すると、どの区間が切れたかを分けて記録できます。監視中は変更できません。</p>
+        <textarea id="targets" spellcheck="false">https://cdnjs.cloudflare.com/ajax/libs/js-cookie/3.0.5/js.cookie.min.js
+https://cdn.jsdelivr.net/npm/js-cookie@3.0.5/dist/js.cookie.min.js</textarea>
+        <p class="hint">外部インターネットの疎通を見ます。<strong>claude.ai 上で開いている場合、届く先は cdnjs.cloudflare.com と cdn.jsdelivr.net の JavaScript ファイルだけです</strong>（ページの安全設定で他への通信が止められます）。館内ゲートウェイや AP の画像 URL を監視したいときは、この HTML をタブレットに保存して Chrome で直接開いてください。監視中は変更できません。</p>
       </div>
 
       <div class="inline">
@@ -282,7 +283,7 @@
   var CONFIG_KEY  = "wifi-logger.config.v1";
 
   var state = {
-    running:false, method:"auto", timer:null,
+    running:false, methodByUrl:{}, timer:null,
     startedAt:null, checks:0,
     samples:[],          // {t, ok, per:[{url,ok,ms}]}
     events:[],           // {type:'outage'|'gap', start, end, people}
@@ -338,13 +339,46 @@
     });
   }
 
-  function probe(url, ms){
-    if(state.method==="image") return probeImage(url, ms);
-    if(state.method==="fetch") return probeFetch(url, ms);
-    return probeFetch(url, ms).then(function(ok){
-      if(ok){ state.method="fetch"; return true; }
-      return probeImage(url, ms).then(function(ok2){ if(ok2) state.method="image"; return ok2; });
+  // claude.ai のビューアは外部への fetch と画像読み込みを止めるが、cdnjs 等の限られた CDN からの
+  // <script> 読み込みだけは通す。そこで JS の URL は <script> で、それ以外は fetch → 画像の順に確かめる。
+  function probeScript(url, ms){
+    return new Promise(function(resolve){
+      var done=false, el=document.createElement("script");
+      function finish(ok){
+        if(done) return;
+        done=true; clearTimeout(t);
+        el.onload=null; el.onerror=null;
+        if(el.parentNode) el.parentNode.removeChild(el);
+        resolve(ok);
+      }
+      var t=setTimeout(function(){ finish(false); }, ms);
+      el.async=true;
+      el.onload=function(){ finish(true); };
+      el.onerror=function(){ finish(false); };
+      el.src = bust(url);
+      (document.head||document.documentElement).appendChild(el);
     });
+  }
+
+  var PROBERS = { script:probeScript, fetch:probeFetch, image:probeImage };
+  var METHOD_LABEL = { script:"スクリプト", fetch:"fetch", image:"画像" };
+  function isScriptUrl(url){ return /\.m?js(\?|#|$)/i.test(url); }
+  function methodsFor(url){ return isScriptUrl(url) ? ["script","fetch"] : ["fetch","image"]; }
+
+  // 一度届いた方式を URL ごとに覚え、以後はその方式だけで確かめる(届かなくなったら本物の切断)。
+  function probe(url, ms){
+    var known = state.methodByUrl[url];
+    if(known) return PROBERS[known](url, ms);
+    var order = methodsFor(url), i = 0;
+    function next(){
+      if(i>=order.length) return Promise.resolve(false);
+      var m = order[i++];
+      return PROBERS[m](url, ms).then(function(ok){
+        if(ok){ state.methodByUrl[url]=m; return true; }
+        return next();
+      });
+    }
+    return next();
   }
 
   /* ---------- 設定 ---------- */
@@ -374,6 +408,8 @@
     if(!raw) return;
     try{
       var c = JSON.parse(raw);
+      // 初版の既定値(google.com の favicon)は claude.ai 上では届かない。保存されていたら現在の既定値に戻す。
+      if(typeof c.targets==="string" && c.targets.trim()==="https://www.google.com/favicon.ico") delete c.targets;
       CONFIG_IDS.forEach(function(k){ if(typeof c[k]==="string" && c[k]!=="") $(k).value = c[k]; });
       if(typeof c.wake==="boolean") $("wake").checked = c.wake;
       if(typeof c.dim==="boolean")  $("dim").checked  = c.dim;
@@ -886,18 +922,20 @@
     var urls=readTargets(), out=$("testOut"), ms=num("timeout",8)*1000;
     if(urls.length===0){ out.textContent="監視先が空です。"; return; }
     $("btnTest").disabled=true; out.textContent="確認中…";
-    var lines=[], fetchOK=0, imgOK=0;
+    var lines=[], reachable=0;
     var jobs=urls.map(function(u){
-      return Promise.all([probeFetch(u,ms), probeImage(u,ms)]).then(function(r){
-        if(r[0]) fetchOK++;
-        if(r[1]) imgOK++;
-        lines.push(label(u)+"  fetch:"+(r[0]?"○":"×")+"  画像:"+(r[1]?"○":"×"));
+      var order=methodsFor(u);
+      return Promise.all(order.map(function(m){ return PROBERS[m](u, ms); })).then(function(r){
+        var hit=null;
+        var parts=order.map(function(m,i){ if(r[i] && hit===null) hit=m; return METHOD_LABEL[m]+":"+(r[i]?"○":"×"); });
+        if(hit){ reachable++; state.methodByUrl[u]=hit; } else { delete state.methodByUrl[u]; }
+        lines.push(label(u)+"  "+parts.join("  "));
       });
     });
     Promise.all(jobs).then(function(){
-      if(fetchOK>0){ state.method="fetch"; lines.push("→ fetch 方式で監視します。"); }
-      else if(imgOK>0){ state.method="image"; lines.push("→ 画像方式で監視します。"); }
-      else { state.method="auto"; lines.push("→ どの監視先にも届きませんでした。URL と Wi-Fi 接続を確認してください。"); }
+      if(reachable===urls.length) lines.push("→ すべての監視先に届きました。");
+      else if(reachable>0) lines.push("→ 届かない監視先があります。届いた監視先だけで監視します。");
+      else lines.push("→ どの監視先にも届きませんでした。Wi-Fi 接続と URL を確認してください。claude.ai 上では cdnjs / jsDelivr の JavaScript 以外には届きません。");
       out.textContent=lines.join("\n");
       $("btnTest").disabled=false;
     });

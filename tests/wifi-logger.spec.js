@@ -15,6 +15,24 @@ async function useFastInterval(page) {
 test.describe('Wi-Fi切断ロガー', () => {
   test.setTimeout(90000);
 
+  test('claude.ai の通信制限下でも、既定の監視先に接続テストが○になる', async ({ page, openWifiLogger }) => {
+    await openWifiLogger();
+    await page.locator('#settings summary').click();
+    await page.fill('#timeout', '3');
+
+    await page.click('#btnTest');
+    const out = page.locator('#testOut');
+    await expect(out).toContainText('すべての監視先に届きました', { timeout: 15000 });
+    await expect(out).toContainText('cdnjs.cloudflare.com  スクリプト:○');
+    await expect(out).toContainText('cdn.jsdelivr.net  スクリプト:○');
+
+    // 対照: 画像 URL は CSP に弾かれて届かない(= テストの CSP 再現が効いている証拠)。
+    await page.fill('#targets', 'https://www.google.com/favicon.ico');
+    await page.click('#btnTest');
+    await expect(out).toContainText('www.google.com  fetch:×  画像:×', { timeout: 15000 });
+    await expect(out).toContainText('どの監視先にも届きませんでした');
+  });
+
   test('監視を開始すると接続中になり、チェック回数が増える', async ({ page, openWifiLogger }) => {
     await openWifiLogger();
     await useFastInterval(page);
